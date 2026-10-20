@@ -189,6 +189,32 @@ services:
 
 Longer paths win, `/` comes last, and paths no route matches get a 404. A domain can be used by only one instance on a server.
 
+An entry can also limit request bodies, change response headers, redirect, and set headers for a service:
+
+```yaml
+services:
+  ingress:
+    - name: site
+      max_body_size: 20MB        # larger requests get 413; KB, MB, GB, KiB, MiB, GiB or bytes
+      headers:                   # response headers of every route
+        remove: [Server]
+        set: {X-Frame-Options: DENY}
+      routes:
+        - name: home
+          path: /
+          exact: true            # only `/` itself, not the paths below it
+          redirect: {to: /web/, status: 302}   # status default 302; also 301, 303, 307, 308
+        - name: api
+          target: api
+          port: 5000
+          path: /backend
+          strip_prefix: true
+          header_up: {X-Real-IP: "{remote_host}"}   # request headers for the service
+        - {name: web, target: web, port: 80, path: /web}
+```
+
+A route has either `target` and `port`, `link`, or `redirect`. `redirect.to` is a path or an `http(s)://` URL; Caddy placeholders work there and in header values, e.g. `https://example.com{uri}`. A redirect on `/` without `exact` catches every path no other route matches. Of two routes with the same path, the `exact` one wins on that path. Header values can't contain quotes, backslashes or line breaks.
+
 A route can also serve another link of the app instead of a service, with `link: <kind>/<entry>`. This is how a Keycloak realm gets its own domain; see [OIDC links](#oidc-links).
 
 ### Request filtering
@@ -242,6 +268,8 @@ services:
 | `db_password` | generated on the first deploy, then kept |
 | `db_url` | `postgres://user:password@postgres18:5432/dbname`; `mysql://…:3306/…` for MariaDB and MySQL |
 
+To load a dump into the link's database, or dump it, use `compost app cmd <instance> <entry>.import` and `.export` ([Database links](Admin-Commands.md#database-links)).
+
 In the overlay you can set `db_name`, `db_user` and `db_password`. The defaults come from `<app>_<prefix>_<entry>`, so renaming the entry gives a new, empty database unless you set them. MariaDB and MySQL user names are at most 32 characters: a longer default is cut and ends in a short hash.
 
 **One user for several databases.** Some software logs in to several databases with one user, e.g. Temporal's `auto-setup` image with its main and visibility databases. Give each link its own database and the same `db_user`:
@@ -263,6 +291,20 @@ A user has one password. Leave `db_password` out and the links get the same gene
       db_user: shop
       db_password: …           # in the overlay
 ```
+
+### Combining values
+
+Every link's `environment` also takes templates, for apps that want the values in another shape. A value with braces is a template: `{name}` is a value of that link, and `{{` and `}}` are literal braces:
+
+```yaml
+      environment:
+        POSTGRES_URL: "{db_host}:{db_port}"                       # postgres18:5432
+        JDBC_URL: "jdbc:postgresql://{db_host}:{db_port}/{db_name}"
+        DSN: "{db_url}?sslmode=require&application_name=shop"
+        PGDATABASE: db_name                                       # a plain value, as before
+```
+
+A template names values of its own link only. An unknown name fails validation (exit 2) with the path of the entry. With [`compost dev env`](Local-Development.md#running-the-app-outside-docker), templates use the addresses on 127.0.0.1 like the plain values.
 
 ## Key-value links
 
@@ -391,8 +433,30 @@ Without `post_logout_redirect_uris`, logout may redirect to any of the `redirect
         verify_email: false
         brute_force_protection: true
         ssl_required: external          # none, external or all
+        sso_session_idle_timeout: 3h    # durations: 30m, 3h, 1d
+        sso_session_max_lifespan: 10h
+        access_token_lifespan: 5m
       roles: [platform_admin, tenant_admin, user]
 ```
+
+**Custom claims.** `client_scopes` creates client scopes in the realm whose mappers put user attributes into tokens, and adds them to the client's default scopes (to the list in `default_scopes` when it is set, else next to the scopes the client has):
+
+```yaml
+      client_scopes:
+        - name: myapp
+          include_in_token_scope: true  # default true: `myapp` appears in the token's `scope`
+          mappers:
+            - name: company
+              type: user_attribute      # the only type so far
+              attribute: company        # the user attribute
+              claim: "custom:company"   # dots nest the claim: org.company
+              multivalued: false        # true: all values, as a list
+              id_token: true            # these three default to true
+              access_token: true
+              userinfo: true
+```
+
+A scope's settings and mappers are set on every deploy: mappers it doesn't list are deleted. Names of the scopes Keycloak creates itself (`profile`, `email`, `roles`, …) are refused. Like roles, scopes stay when a link is removed, until the realm is deleted. Links that share a realm should agree on them.
 
 **Users for bootstrap accounts.** A user's `roles` (from the link's `roles`) are added on every deploy, never removed. With `temporary: true`, the password is set only when compost creates the user, and must be changed at the first login, so later deploys keep the one the user chose. `id` gives the user a fixed ID when compost creates it, for an app that recognizes its first admin by ID:
 
@@ -405,7 +469,10 @@ Without `post_logout_redirect_uris`, logout may redirect to any of the `redirect
           roles: [platform_admin, user]
           password: …                   # secret
           temporary: true
+          attributes: {company: ACME, userid: 485, groups: [a, b]}   # set on every deploy
 ```
+
+`attributes` are set on every deploy; other attributes of the user stay. Keycloak keeps attributes outside its user profile only when the realm allows them, so a link with attributes sets the realm's *unmanaged attributes* policy to *only administrators can view and edit* (`ADMIN_EDIT`), unless it is already that or *enabled*. Users then can't change them on their account page, so a claim taken from them can be trusted. With *enabled*, which compost leaves as it is, users can edit them.
 
 User IDs are unique in the whole Keycloak, not per realm: two instances on one Keycloak (e.g. staging and production) can't create users with the same `id`, and the second deploy fails. If the user already exists with another ID, the deploy keeps it and warns.
 
@@ -500,9 +567,45 @@ services:
 | `service_name` | `backend`: the compose service of each target |
 | `resource_attributes` | `service.namespace=myapp-staging,deployment.environment=staging` |
 
+With [request tracing](Servers-and-Shared-Apps.md#request-tracing) on the ingress, requests reach the app with a `traceparent` header: an SDK that reads it puts the app's spans in the trace Caddy started.
+
 Services in `targets` and `metrics` join the monitoring network as `<instance>-<service>`. The collector picks up a metrics endpoint once the app runs, without a restart.
 
 compost collects the output with Docker's `fluentd` log driver, set in its override file, so `docker logs` keeps working. A service that sets its own `logging` in the compose file can't be a target with `logs: true`: the deploy fails and says so.
+
+## Mail links
+
+A mail link points services at a [mail catcher](Servers-and-Shared-Apps.md#mailpit-mail) on development and test servers: they send by SMTP or through the AWS SES API, and the mail lands in its inbox. On production, where the app uses a real provider, the server has no mail app and an `optional` link is skipped:
+
+```yaml
+services:
+  mail:
+    - name: outbox
+      optional: true                   # skip (with a notice) when the server runs no mail app
+      instance: mail                   # optional: this shared app, when there are several
+      targets: [api]
+      environment:
+        AWS_ENDPOINT_URL_SES: ses_endpoint
+        AWS_ENDPOINT_URL_SESV2: ses_endpoint
+        AWS_REGION: aws_region
+        AWS_ACCESS_KEY_ID: aws_access_key_id
+        AWS_SECRET_ACCESS_KEY: aws_secret_access_key
+        SMTP_URL: smtp_url
+```
+
+| Link value | Example |
+|---|---|
+| `ses_endpoint` | `http://mail-ses:8005`: the SES API, v1 and v2 |
+| `smtp_host`, `smtp_port` | `mail`, `1025` |
+| `smtp_url` | `smtp://mail:1025` |
+| `aws_endpoint` | `http://mail-aws:5000`: moto, for other AWS APIs. Needs `moto: true` on the mail app |
+| `aws_region` | `us-east-1`, the mail app's `region` |
+| `aws_access_key_id`, `aws_secret_access_key` | `test`: the mocks accept any |
+| `inbox_url` | `https://mail.test.example.com`, empty without `url` |
+
+AWS SDKs read `AWS_ENDPOINT_URL_<SERVICE>` for one service and `AWS_ENDPOINT_URL` for all, so the same code sends through real SES where these variables are unset. The services in `targets` join the mail app's network. Removing the link deletes only its record: the mail in the inbox belongs to all apps.
+
+`compost dev up` adds a mail app for a link that isn't `optional`. To keep the link optional on servers and have it locally, set `optional: false` for it in `.compost-local.yaml`.
 
 ## Deploying
 

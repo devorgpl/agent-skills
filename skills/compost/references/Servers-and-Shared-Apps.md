@@ -90,7 +90,7 @@ Two shared apps can't have the same `host_port`.
 
 ## Shared app types
 
-A server has at most one ingress, and any number of databases (Postgres, MariaDB, MySQL), key-value stores (Valkey, Redis), storage (Garage, external S3), OIDC providers, monitoring apps, workflow servers (Temporal) and communication apps (channels for notifications: webhook, Slack, Mattermost, Discord, Matrix, email; see [Notifications](Notifications.md)). Every shared app has a `name` (lowercase letters, digits and `-`, up to 31 characters, starting with a letter), a `type`, a `version` and optionally an `image`. Type-specific settings go in `configuration`.
+A server has at most one ingress, and any number of databases (Postgres, MariaDB, MySQL), key-value stores (Valkey, Redis), storage (Garage, external S3), OIDC providers, monitoring apps, mail catchers (Mailpit), workflow servers (Temporal) and communication apps (channels for notifications: webhook, Slack, Mattermost, Discord, Matrix, email; see [Notifications](Notifications.md)). Every shared app has a `name` (lowercase letters, digits and `-`, up to 31 characters, starting with a letter), a `type`, a `version` and optionally an `image`. Type-specific settings go in `configuration`.
 
 ### caddy (`ingress`)
 
@@ -145,7 +145,7 @@ shared:
 
 `acme_email` is the contact Let's Encrypt uses for expiry warnings; compost refuses the config when it is set with any `tls` other than `auto`. Certificates are kept in `data/` (see [Files and folders](Files-and-Folders.md)) and are part of `server backup`, so a restored server doesn't request them again.
 
-With [`monitoring`](#monitoring-shared-apps), Caddy also serves its Prometheus metrics (requests, durations, sizes per host) on port 9180 inside its container, not published on the host, and the collector scrapes them. This needs Caddy 2.8 or newer; the default image is.
+With [`monitoring`](#monitoring-shared-apps), Caddy also serves its Prometheus metrics (requests, durations, sizes per host) on port 9180 inside its container, not published on the host, and the collector scrapes them. This needs Caddy 2.8 or newer; the default image is. With `monitoring.traces: true` it also traces every request, see [Request tracing](#request-tracing).
 
 Caddy runs as the server user, so its files can be backed up and removed without root. Hosts and paths no app uses get a 404. When an app is deployed, Caddy is reloaded, not restarted; a site that fails `caddy validate` is rolled back and fails the deploy.
 
@@ -487,12 +487,46 @@ shared:
 
 What ends up in OpenObserve (organization `default`):
 - **Logs** stream `docker`: the output of linked containers, with `fluent_tag` (`<instance>.<service>`: the compose service, e.g. `myapp-prod.backend`; for a shared app its plain name, e.g. `compost-ingress-caddy-main.caddy`), `container_name`, `source` (`stdout`/`stderr`) and the Compose project and service. A line that is a JSON object, like Caddy's log, is stored as fields: `body_level`, `body_msg`, `body_request_method`, `body_status` and so on, nested objects below the third level as JSON text (e.g. `body_request_headers`). Other lines stay in `body`.
-- **Logs** stream `default`, **traces** and **metrics** that apps send with OpenTelemetry (OTLP).
+- **Logs** stream `default`, **traces** and **metrics** that apps send with OpenTelemetry (OTLP), and the ingress's traces with [request tracing](#request-tracing).
 - **Metrics** scraped from the Prometheus endpoints of links, labeled `compost_app`, `compost_prefix` and `compost_service` (named like in `fluent_tag`), and the `container_*` metrics.
 
 Log in with `root_email` and `root_password`; compost writes both to `connectors/monitoring/<name>/root-connector.yaml` on the server. Apps link to it with [`services.monitoring`](Applications.md#monitoring-links).
 
 The log driver sends asynchronously: linked containers start and run while the collector is down, and `docker logs` keeps working.
+
+### mailpit (`mail`)
+
+A mail catcher for development and test servers: apps send mail to it instead of a real provider, and you read it in a web inbox. Nothing leaves the server. It runs up to three containers:
+
+- **mailpit**, [Mailpit](https://mailpit.axllent.org): SMTP for apps, on port 1025 without TLS (any user and password are accepted), and the inbox.
+- **ses**, [aws-ses-v2-local](https://github.com/domdomegg/aws-ses-v2-local): the AWS SES API (v1 and v2) on port 8005, so code that sends through SES runs unchanged. It hands every mail to Mailpit.
+- **aws**, with `moto: true`: [moto](https://docs.getmoto.org), a mock of other AWS APIs (Cognito, SNS, SQS, …) on port 5000.
+
+```yaml
+shared:
+  mail:
+    - name: mail
+      type: mailpit
+      version: 1
+      configuration:
+        url: https://mail.test.example.com
+        moto: true
+        password: …    # in .compost-server.secrets.yaml
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `version` | `1` | Major version of Mailpit |
+| `image` | `axllent/mailpit:vX.Y.Z` for 1 | Required for other versions |
+| `configuration.url` | – | Public URL of the inbox, `https://<domain>` or `http://<domain>[:port]`, no path. compost routes its domain through the ingress. Without it, the inbox is not reachable |
+| `configuration.password` | generated | Secret. Password of the inbox's user `admin`; at least 8 characters, without `:` |
+| `configuration.region` | `us-east-1` | The region links give apps (`aws_region`) |
+| `configuration.moto` | `false` | Also run moto for other AWS APIs |
+| `configuration.host_port` | – | For apps outside Docker ([`dev up --host`](Local-Development.md#running-the-app-outside-docker)): the SES API on this port of 127.0.0.1, SMTP on the next one, moto on the one after |
+| `configuration.ses_image` | `ghcr.io/domdomegg/aws-ses-v2-local:X.Y.Z` | |
+| `configuration.moto_image` | `motoserver/moto:X.Y.Z` | |
+
+There is one inbox per mail app, for all apps linked to it. Log in as `admin` with the password; compost writes it to `connectors/mail/<name>/root-connector.yaml` on the server. Mail, and moto's data, stay in memory: a restart of the containers (a deploy that changes them, a reboot) empties them, and backups don't hold them. Apps link to it with [`services.mail`](Applications.md#mail-links).
 
 ### temporal (`workflow`)
 
@@ -537,7 +571,7 @@ Workflows and namespaces live in the two databases and are saved with them; a se
 
 ## Monitoring shared apps
 
-`monitoring` on a shared app sends its output, and the metrics it serves, to a monitoring app:
+`monitoring` on a shared app sends its output, the metrics it serves and, for the ingress, traces of the requests it serves to a monitoring app:
 
 ```yaml
 shared:
@@ -546,7 +580,7 @@ shared:
       type: caddy
       configuration:
         access_log: true
-      monitoring: {}
+      monitoring: {traces: true}
   database:
     - name: postgres18
       type: postgres
@@ -559,8 +593,19 @@ shared:
 | `monitoring.instance` | – | The monitoring app to use, when there are several |
 | `monitoring.logs` | `true` | Collect the output of its containers |
 | `monitoring.metrics` | `true` | Scrape its metrics, if it serves any: Caddy and Temporal do |
+| `monitoring.traces` | `false` | Ingress only: trace every request it serves, on every site, see [Request tracing](#request-tracing) |
 
 Caddy, Postgres, Keycloak and Temporal can be monitored. External shared apps and monitoring apps can't. It works in both directions: OpenObserve's domain is served by the Caddy that sends its logs to it. On the first deploy, Caddy starts before OpenObserve, and Docker keeps Caddy's output in a small buffer and sends it once the collector runs.
+
+### Request tracing
+
+With `monitoring.traces: true` on the ingress, Caddy starts an OpenTelemetry trace for every request to every site, apps' and `sites` alike:
+
+- It sends a span per request to the collector, over OTLP/HTTP, named after the request's host, with its method, path, status and duration. In OpenObserve they show under Traces as service `compost-shared-<name>` (e.g. `compost-shared-caddy-main`).
+- It passes the request on to the app with a W3C `traceparent` header. An app with an OpenTelemetry SDK, given the collector's address by its [monitoring link](Applications.md#monitoring-links), continues that trace, so its spans show below Caddy's. A request that comes with a `traceparent` header continues that trace instead.
+- With `access_log`, every log line gets the request's `traceID` and `spanID`, to go from a log line to its trace.
+
+Caddy gets the collector's address in `OTEL_EXPORTER_OTLP_ENDPOINT` and the other `OTEL_*` variables, set in its `compose.override.yaml`, so turning tracing on or off recreates Caddy. Spans of requests served while the collector is down are lost. Other shared apps send no traces: `server deploy` refuses `traces` on them.
 
 ## External databases
 

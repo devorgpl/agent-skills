@@ -47,6 +47,7 @@ services:
   database: [ … ]
   oidc: [ … ]
   monitoring: [ … ]
+  mail: [ … ]
 app_services:
   - name: backend                      # name used by links
     service: backend-webapp            # service in the compose file
@@ -82,6 +83,8 @@ commands:                              # run by name with `app cmd`
 
 Each step is `{exec: <service>, command: …}`, run in the service's running container, or `{run: <service>, command: …}`, a one-off container (`command` optional) that must exit with 0. A string `command` runs with `sh -c`; a list is the command and its arguments. See [Backup and restore](Backup-and-Restore.md#steps-around-a-backup-or-restore).
 
+In the `environment` of every link below, a variable gets one of the link's values, e.g. `db_url`, or a template with values in braces, e.g. `"{db_host}:{db_port}"` ([Combining values](Applications.md#combining-values)).
+
 ### `services.ingress[]`
 
 | Key | Default | Meaning |
@@ -95,6 +98,12 @@ Each step is `{exec: <service>, command: …}`, run in the service's running con
 | `routes[].path` | `/` | |
 | `routes[].strip_prefix` | `false` | Forward `/ui/x` as `/x` |
 | `routes[].link` | – | `<kind>/<entry>` of another link instead of `target`/`port`, e.g. `oidc/login` |
+| `routes[].exact` | `false` | Match only `path`, not the paths below it |
+| `routes[].redirect` | – | `{to, status}` instead of `target`/`port`: redirect to a path or URL; `status` 301, 302 (default), 303, 307 or 308 |
+| `routes[].header_up` | `{}` | Request headers set for the service, e.g. `{X-Real-IP: "{remote_host}"}` |
+| `max_body_size` | – | Largest request body, e.g. `20MB`; larger requests get 413 |
+| `headers.set` | `{}` | Response headers set on every route |
+| `headers.remove` | `[]` | Response headers removed, e.g. `[Server]` |
 | `security.bans` | server default | Block addresses CrowdSec banned. Needs a `caddysecurebuild` ingress, like every `security` key |
 | `security.appsec` | server default | Check requests with CrowdSec AppSec |
 | `security.rate_limits` | server default | Rate-limit zones of the server, by name; `[]` for none |
@@ -151,10 +160,11 @@ Each step is `{exec: <service>, command: …}`, run in the service's running con
 | `pkce` | – | `S256` or `plain` |
 | `direct_access_grants` | `false` | Resource owner password grant |
 | `default_scopes` | unchanged | The client's default scopes |
-| `realm_settings` | `{}` | `registration`, `reset_password`, `login_with_email`, `verify_email`, `brute_force_protection` (`true`/`false`), `ssl_required` (`none`, `external`, `all`); unset keys are not changed |
+| `realm_settings` | `{}` | `registration`, `reset_password`, `login_with_email`, `verify_email`, `brute_force_protection` (`true`/`false`), `ssl_required` (`none`, `external`, `all`), `sso_session_idle_timeout`, `sso_session_max_lifespan`, `access_token_lifespan` (durations like `30m`, `3h`); unset keys are not changed |
 | `roles` | `[]` | Realm roles, created if missing |
+| `client_scopes[]` | `[]` | `name`, `include_in_token_scope` (default `true`), `mappers[]`: `name`, `type: user_attribute`, `attribute`, `claim`, `multivalued` (default `false`), `id_token`, `access_token`, `userinfo` (default `true`). Set on every deploy and added to the client's default scopes |
 | `client_secret` | generated | Secret |
-| `users[]` | `[]` | `username`, `email`, `email_verified` (default `true` with `email`), `first_name`, `last_name`, `id` (when created), `roles` (from `roles`), `password`, `temporary` (password set only when created, changed at first login). Secret |
+| `users[]` | `[]` | `username`, `email`, `email_verified` (default `true` with `email`), `first_name`, `last_name`, `id` (when created), `roles` (from `roles`), `password`, `temporary` (password set only when created, changed at first login), `attributes` (set on every deploy). Secret |
 | `targets`, `environment` | | Values: `oidc_issuer`, `oidc_internal_url`, `oidc_base_url`, `oidc_internal_base_url`, `oidc_origin`, `oidc_jwks_uri`, `oidc_realm`, `oidc_client_id`, `oidc_client_secret` |
 
 ### `services.workflow[]`
@@ -181,6 +191,16 @@ Each step is `{exec: <service>, command: …}`, run in the service's running con
 | `environment` | `{}` | Variable → `otlp_endpoint`, `otlp_grpc_endpoint`, `otlp_protocol`, `service_name`, `resource_attributes` |
 
 At least one of `targets` and `metrics` is required.
+
+### `services.mail[]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | required | Entry name |
+| `instance` | – | Pin a mail app by name; required when the server has several |
+| `optional` | `false` | Skip the entry when the server runs no mail app |
+| `targets` | required | `app_services` that get the variables and the network |
+| `environment` | `{}` | Variable → `smtp_host`, `smtp_port`, `smtp_url`, `ses_endpoint`, `aws_endpoint` (with `moto: true`), `aws_region`, `aws_access_key_id`, `aws_secret_access_key`, `inbox_url` |
 
 Details and examples: [Applications](Applications.md).
 
@@ -223,6 +243,8 @@ shared:
     - {name: keycloak, type: keycloak, version: 26, configuration: {url: https://auth.example.com}}
   monitoring:
     - {name: monitoring, type: openobserve, version: 1, configuration: {url: https://logs.example.com}}
+  mail:                                # development and test servers
+    - {name: mail, type: mailpit, version: 1, configuration: {url: https://mail.test.example.com}}
   workflow:
     - {name: temporal, type: temporal, version: 1, configuration: {ui: {url: https://temporal.example.com, oidc: {}}}}
   communication:
@@ -273,7 +295,7 @@ Keys every shared app has:
 | `image` | per type | |
 | `configuration` | `{}` | The type's keys |
 | `external` | – | A server compost doesn't run; databases only |
-| `monitoring` | – | Send its output and metrics to a monitoring app: `instance`, `logs` (default `true`), `metrics` (default `true`). See [Monitoring shared apps](Servers-and-Shared-Apps.md#monitoring-shared-apps) |
+| `monitoring` | – | Send its output and metrics to a monitoring app: `instance`, `logs` (default `true`), `metrics` (default `true`), `traces` (default `false`, ingress only). See [Monitoring shared apps](Servers-and-Shared-Apps.md#monitoring-shared-apps) |
 
 `configuration.host_port` (postgres, mariadb, mysql, valkey, redis, garage) also publishes the shared app on 127.0.0.1 of the server, e.g. for an app run outside Docker ([Local development](Local-Development.md#running-the-app-outside-docker)). Each port is used by one shared app at most; external shared apps can't have one.
 
