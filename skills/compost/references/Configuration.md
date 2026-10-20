@@ -97,7 +97,7 @@ In the `environment` of every link below, a variable gets one of the link's valu
 | `routes[].port` | – | Container port |
 | `routes[].path` | `/` | |
 | `routes[].strip_prefix` | `false` | Forward `/ui/x` as `/x` |
-| `routes[].link` | – | `<kind>/<entry>` of another link instead of `target`/`port`, e.g. `oidc/login` |
+| `routes[].link` | – | `<kind>/<entry>` of another link instead of `target`/`port`, e.g. `oidc/login`. Skipped when that link is optional and skipped |
 | `routes[].exact` | `false` | Match only `path`, not the paths below it |
 | `routes[].redirect` | – | `{to, status}` instead of `target`/`port`: redirect to a path or URL; `status` 301, 302 (default), 303, 307 or 308 |
 | `routes[].header_up` | `{}` | Request headers set for the service, e.g. `{X-Real-IP: "{remote_host}"}` |
@@ -150,11 +150,12 @@ In the `environment` of every link below, a variable gets one of the link's valu
 |---|---|---|
 | `name`, `type` | required | `type: keycloak` |
 | `version`, `instance` | `"*"`, – | As for databases |
+| `optional` | `false` | Skip the entry (and ingress routes to it) when the server runs no provider of its `type` |
 | `realm` | `<app>-<prefix>` | Created if missing |
 | `client_id` | `<app>-<prefix>-<entry>` | |
 | `public_client` | `false` | No client secret |
 | `public_url` | – | The realm's own domain, or a path of one (e.g. `https://app.example.com/auth`); needs an ingress route with `link: oidc/<entry>` |
-| `redirect_uris` | required | |
+| `redirect_uris` | required | With `optional`, only where the link is deployed |
 | `web_origins` | `[]` | |
 | `post_logout_redirect_uris` | the `redirect_uris` | |
 | `pkce` | – | `S256` or `plain` |
@@ -199,6 +200,7 @@ At least one of `targets` and `metrics` is required.
 | `name` | required | Entry name |
 | `instance` | – | Pin a mail app by name; required when the server has several |
 | `optional` | `false` | Skip the entry when the server runs no mail app |
+| `region` | the mail app's `region` | `aws_region` of this link |
 | `targets` | required | `app_services` that get the variables and the network |
 | `environment` | `{}` | Variable → `smtp_host`, `smtp_port`, `smtp_url`, `ses_endpoint`, `aws_endpoint` (with `moto: true`), `aws_region`, `aws_access_key_id`, `aws_secret_access_key`, `inbox_url` |
 

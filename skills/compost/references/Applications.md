@@ -385,10 +385,11 @@ services:
     - name: login
       type: keycloak
       version: ">=26"
+      optional: false                  # true: skip (with a notice) when the server runs no keycloak
       realm: myapp                     # default <app>-<prefix>; created if missing
       client_id: web                   # default <app>-<prefix>-<entry>
       public_client: false             # true: no client secret, e.g. for a single-page app
-      redirect_uris: ["https://staging.example.com/*"]   # required, usually in the overlay
+      redirect_uris: ["https://staging.example.com/*"]   # required (if optional: when deployed), usually in the overlay
       web_origins: []
       client_secret: …                 # secret; generated on the first deploy, then kept
       users:                           # secret; created if missing, passwords set on every deploy (unless temporary)
@@ -411,6 +412,34 @@ services:
 | `oidc_realm` | `myapp` |
 | `oidc_client_id` | `web` |
 | `oidc_client_secret` | empty for public clients |
+
+**Optional links.** When only some servers run Keycloak, e.g. development and test, while staging and production log in through another provider (such as AWS Cognito), mark the link `optional: true`. On a server with no provider of the link's `type`, the deploy skips it with a notice: its `environment` isn't set, so the services take those variables from `app_services` in the overlay, and ingress routes with `link: oidc/<entry>` are skipped too (an ingress entry with no other routes fails; make it `optional` and leave out its domains on those servers). A server that runs Keycloak of another version, or not the pinned `instance`, is still an error. `redirect_uris` are needed only where the link is deployed, so they can stay in the overlays of the servers with Keycloak:
+
+```yaml
+# compost.yaml
+services:
+  oidc:
+    - name: login
+      type: keycloak
+      optional: true
+      realm: myapp
+      public_client: true
+      targets: [api]
+      environment:
+        OIDC_ISSUER_URL: oidc_issuer
+        OIDC_CLIENT_ID: oidc_client_id
+```
+
+```yaml
+# .compost-prod.yaml: no Keycloak on this server
+app_services:
+  - name: api
+    environment:
+      OIDC_ISSUER_URL: https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_AbCdEf123
+      OIDC_CLIENT_ID: 1example23456789
+```
+
+`compost dev up` adds Keycloak only for a link that isn't `optional`: to have it locally, set `optional: false` for the link in `.compost-local.yaml`, along with its `redirect_uris`.
 
 **Client settings** are set on every deploy, so changes made in the admin console don't last:
 
@@ -583,6 +612,7 @@ services:
     - name: outbox
       optional: true                   # skip (with a notice) when the server runs no mail app
       instance: mail                   # optional: this shared app, when there are several
+      region: eu-central-1             # aws_region of this link; default: the mail app's region
       targets: [api]
       environment:
         AWS_ENDPOINT_URL_SES: ses_endpoint
@@ -599,13 +629,13 @@ services:
 | `smtp_host`, `smtp_port` | `mail`, `1025` |
 | `smtp_url` | `smtp://mail:1025` |
 | `aws_endpoint` | `http://mail-aws:5000`: moto, for other AWS APIs. Needs `moto: true` on the mail app |
-| `aws_region` | `us-east-1`, the mail app's `region` |
+| `aws_region` | `eu-central-1`: the link's `region`, else the mail app's (default `us-east-1`). The mocks accept any region, so set the one production uses |
 | `aws_access_key_id`, `aws_secret_access_key` | `test`: the mocks accept any |
 | `inbox_url` | `https://mail.test.example.com`, empty without `url` |
 
 AWS SDKs read `AWS_ENDPOINT_URL_<SERVICE>` for one service and `AWS_ENDPOINT_URL` for all, so the same code sends through real SES where these variables are unset. The services in `targets` join the mail app's network. Removing the link deletes only its record: the mail in the inbox belongs to all apps.
 
-`compost dev up` adds a mail app for a link that isn't `optional`. To keep the link optional on servers and have it locally, set `optional: false` for it in `.compost-local.yaml`.
+`compost dev up` adds a mail app for a link that isn't `optional`. To keep the link optional on servers and have it locally, set `optional: false` for it in `.compost-local.yaml`. When a link maps `aws_endpoint`, `dev up` sets `moto: true` on the mail app it uses, whether it adds it or it exists (`setting moto: true on mail mail for services.mail[aws]`). On other servers, set `moto: true` in their `compost-server.yaml`.
 
 ## Deploying
 

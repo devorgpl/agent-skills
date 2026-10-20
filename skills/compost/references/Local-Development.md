@@ -37,12 +37,12 @@ For every link of the app ([Applications](Applications.md#database-links)), `dev
 | `database`, `keyvalue` | The link's `type`. Its version is the starter's (e.g. Postgres 18) if the link's `version` allows it, else the lowest major version the link allows, e.g. `postgres15` for `version: "^15"` |
 | `storage` | Garage, named `storage` |
 | `ingress` with domains | Caddy on port 18080, plain HTTP |
-| `oidc` | Keycloak on `http://auth.localhost:18080`, with the Postgres 18 and Caddy it needs |
+| `oidc` that isn't `optional` | Keycloak on `http://auth.localhost:18080`, with the Postgres 18 and Caddy it needs |
 | `workflow` | Temporal, with what it needs |
 | `monitoring` that isn't `optional` | OpenObserve on `http://logs.localhost:18080` |
-| `mail` that isn't `optional` | Mailpit, its inbox on `http://mail.localhost:18080` |
+| `mail` that isn't `optional` | Mailpit, its inbox on `http://mail.localhost:18080`; with `moto: true` when a mail link maps `aws_endpoint` |
 
-A link that pins a shared app with `instance`, e.g. a production server's `temporal-main`, uses the shared app of that name. If this machine has none, it uses the one shared app that matches the link without the pin (`services.workflow[jobs]: local has no `temporal-main`; using temporal`), so projects don't bring their own copies of shared apps. Only when none matches is one added, with the pinned name. To choose another one yourself, set its `instance` in `.compost-local.yaml`. Shared apps that are already configured never change, except for the `host_port` that `--host` adds. Shared apps that are configured but not running are started.
+A link that pins a shared app with `instance`, e.g. a production server's `temporal-main`, uses the shared app of that name. If this machine has none, it uses the one shared app that matches the link without the pin (`services.workflow[jobs]: local has no `temporal-main`; using temporal`), so projects don't bring their own copies of shared apps. Only when none matches is one added, with the pinned name. To choose another one yourself, set its `instance` in `.compost-local.yaml`. Shared apps that are already configured never change, except for the `host_port` that `--host` adds and moto, which a mail link that maps `aws_endpoint` turns on. Shared apps that are configured but not running are started.
 
 ```text
 Shared apps on local (local)
@@ -77,7 +77,7 @@ compost dev env -o .env       # then start the app with these variables
 
 - Gives the shared apps that the app's database, key-value, storage and mail links use a `host_port` on 127.0.0.1, unless they have one. The first free port from 15432 (Postgres), 13306 (MariaDB, MySQL), 16379 (Valkey, Redis), 13900 (Garage's S3 API) and 18005 (Mailpit: the SES API, then SMTP and moto on the next two) is used. This recreates the shared app's container once; its data is kept.
 - Sets up the links (database and user, bucket and key, key-value database, realm and client, namespace) and stops the app's containers, if an earlier `dev up` started them. `compost app list` shows the instance as `provisioned`.
-- Skips ingress and monitoring links: they need the app's containers.
+- Skips monitoring links, and the ingress routes to the app's services (`target`): they need the app's containers. Routes to other links and redirects stay, e.g. a [realm on its own domain](Applications.md#oidc-links), for an app on the host that must reach the issuer by name: Python and Node on Linux often don't resolve `*.localhost`, while a domain such as `auth.lvh.me` resolves to 127.0.0.1 through public DNS. An ingress entry with no other routes is skipped.
 
 `compost dev env` prints the variables the links give, as a process on this machine sees them: a database at `127.0.0.1:<host_port>` instead of its Docker name. With `--service`, only that service's variables; without it, those of all services, which must not set a variable differently. `--format` is `dotenv` (the default), `shell` (`export KEY='value'`) or `json`. `-o` writes a file with mode `0600` and warns if git doesn't ignore it: it holds passwords. Add it to `.compostignore` as well, or `dev up` without `--host` uploads it, and Docker Compose reads a `.env` it finds there.
 
