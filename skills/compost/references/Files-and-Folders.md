@@ -1,0 +1,154 @@
+# Files and folders
+
+## On your machine
+
+`~/.compost`, or `$COMPOST_HOME`:
+
+```
+~/.compost/
+├── compost-manager.yaml    manager key; copy it (or use `init --key`) to manage the same servers elsewhere
+├── servers.yaml            servers from `server define` (and `local`, if a `dev` command defined it)
+├── config.yaml             preferences from `compost config`
+├── current_context         server name from `connect`
+└── ssh/                    shared SSH connection sockets
+```
+
+## In an app repository
+
+```
+myapp/
+├── docker-compose.yaml                compose file, never changed by compost
+├── compost.yaml                       how to deploy; commit
+├── .compost.secrets.example.yaml      example overlay from `app generate`; commit
+├── .compost-staging.yaml              overlay with secrets; don't commit
+├── .compost-local.yaml                overlay that `dev` commands merge; don't commit
+├── .env                               variables from `compost dev env -o .env`; holds passwords, don't commit
+├── .compostignore                     not uploaded (gitignore syntax)
+├── .claude/skills/compost/            Agent Skill from `compost agent skill`, if you install it there
+└── …
+```
+
+Not uploaded with the sources: `.git/`, files given with `-f`, `.compost-*.yaml`, `.compost.*.yaml` and `.compostignore` patterns. Add a `.env` written by `dev env` to `.compostignore` too: Docker Compose reads a `.env` in the uploaded folder. With `deployment.source_dir`, the uploaded folder is that one instead, and `compost.yaml` can live in a separate deployment repository ([Applications](Applications.md#sources-in-another-folder)).
+
+## In an infrastructure folder
+
+```
+infra/
+├── compost-server.yaml                    shared apps; commit
+├── compost-server.prod.yaml               overrides for the real server; commit
+├── .compost-server.secrets.example.yaml   commit
+└── .compost-server.secrets.yaml           secrets; don't commit
+```
+
+## On the server
+
+`~/.compost-server` of the server user, or `server_home` from `servers.yaml`. compost writes only here and to Docker, and, for [scheduled backups](Backup-and-Restore.md#scheduled-backups), one line in the server user's crontab, between `# compost: scheduled backups of <folder>` and `# compost: end of <folder>`.
+
+```
+~/.compost-server/
+├── manager_key                       key of the compost installation managing this server
+├── compost-server.yaml               effective server config, without secrets
+├── state.yaml                        status of shared apps and instances, last runs of scheduled backups, notified alerts
+├── lock/                             exists while a command changes the server
+├── bin/compost                       compost itself, for scheduled backups
+├── logs/backup.log                   output of scheduled backups and notifications
+├── logs/commands.log                 every command `server cmd` and `app cmd` ran, without the values of `env`
+├── tmp/                              short-lived files, e.g. client credentials for external databases, archives on their way to or from an S3 target, variables of a `server cmd` or `app cmd`
+├── backups/                          archives of the `server` backup target; a profile's are named `<instance or server>-<profile>-<time>…`
+├── secrets/apps/<app>/<prefix>.yaml  overlay stored by `secret deploy` or `app deploy --secret`
+├── secrets/server.yaml               shared apps' secrets stored by `server deploy --secret`
+├── shared/
+│   ├── ingress/caddy-main/
+│   │   ├── compose.yaml
+│   │   ├── compose.override.yaml     from its `monitoring`, if set
+│   │   ├── conf/Caddyfile
+│   │   ├── conf/sites/<instance>-<entry>.caddy
+│   │   ├── conf/custom/<site>.caddy  `sites` of compost-server.yaml
+│   │   ├── data/                     certificates
+│   │   ├── config/
+│   │   ├── build/Dockerfile          caddysecurebuild: the image built on the server
+│   │   ├── conf/crowdsec/            caddysecurebuild: the CrowdSec agent's log sources, ban profile, whitelists, simulated scenarios
+│   │   ├── logs/access.log           caddysecurebuild: access log of every site, read by CrowdSec
+│   │   └── secrets/crowdsec.env      caddysecurebuild: key of the bouncer in Caddy
+│   ├── database/postgres18/
+│   │   ├── compose.yaml
+│   │   ├── data/                     PGDATA
+│   │   └── secrets/postgres.env      root password
+│   ├── oidc/keycloak/
+│   │   ├── compose.yaml
+│   │   ├── compose.override.yaml     networks and database settings from its links
+│   │   └── secrets/keycloak.env      admin user and password
+│   ├── keyvalue/valkey/
+│   │   ├── compose.yaml
+│   │   ├── conf/server.conf, conf/users.acl   settings; users of the links (password hashes)
+│   │   ├── data/                     snapshot and append-only files
+│   │   └── secrets/password.env      password of the `default` user
+│   ├── storage/storage/
+│   │   ├── compose.yaml
+│   │   ├── garage.toml               Garage's settings, with its RPC secret and admin token
+│   │   ├── meta/, data/              metadata and objects
+│   │   └── secrets/garage.env        the RPC secret and admin token, kept across deploys
+│   ├── communication/ops-chat/       a communication app: no compose project
+│   │   ├── build/                    Dockerfile and script of compost's image, unless `image` is set
+│   │   ├── image                     the image to run
+│   │   └── secrets/communication.env the channel's settings and credentials
+│   ├── workflow/temporal/
+│   │   ├── compose.yaml              schema, server, admin and ui
+│   │   ├── compose.override.yaml     networks and settings from its links (databases, ingress, oidc)
+│   │   ├── schema.sh                 creates or updates Temporal's tables
+│   │   ├── cluster.env               the shard count, fixed by the first deploy
+│   │   └── dynamicconfig/docker.yaml `dynamic_config`
+│   └── monitoring/monitoring/
+│       ├── compose.yaml              openobserve and collector
+│       ├── compose.override.yaml     ingress network, if `url` is set
+│       ├── data/                     OpenObserve's data
+│       ├── collector/config.yaml
+│       ├── collector/targets/<instance>-<entry>.yaml   metrics endpoints of a link
+│       └── secrets/                  openobserve.env, collector.env: root email and password
+├── connectors/                       link records, one per instance and entry
+│   ├── ingress/caddy-main/<instance>-<entry>.yaml
+│   ├── database/postgres18/root-connector.yaml, <instance>-<entry>.yaml
+│   │                                 (for an external database: how to reach it, and root credentials)
+│   ├── oidc/keycloak/root-connector.yaml, <instance>-<entry>.yaml
+│   ├── workflow/temporal/<instance>-<entry>.yaml   the link's namespace and retention
+│   └── monitoring/monitoring/root-connector.yaml, <instance>-<entry>.yaml
+│                                     (root-connector.yaml: URL and root login)
+└── apps/<app>/<prefix>/
+    ├── sources/                      uploaded files; .compost/ holds the compose_overrides
+    ├── compose/compost.override.yaml networks and variables added to your services
+    ├── compost.yaml                  effective app config, without secrets
+    ├── compost-env.yaml              shared apps this instance uses; links still to remove
+    └── releases/<n>/                 a release for `app rollback`: sources/, compost.yaml, release.yaml (time, images)
+```
+
+Files with secrets (`secrets/`, connector records of databases and OIDC, `root-connector.yaml` files, `compost.override.yaml`) have mode `0600`, their folders `0700`. Only compost writes `state.yaml`; a compost that does not know its layout (its `schema`) refuses to use it and asks to be upgraded.
+
+## Docker names
+
+| Object | Name |
+|---|---|
+| Instance compose project | `<app>-<prefix>`, e.g. `myapp-staging` |
+| Shared app compose project | `compost-<kind>-<name>`, e.g. `compost-database-postgres18` |
+| Shared app compose service | `compost-shared-<name>`, e.g. `compost-shared-postgres18`; OpenObserve's collector is `compost-shared-<name>-collector`, Temporal's other services `compost-shared-<name>-schema`, `-admin` and `-ui`, the CrowdSec agent of a `caddysecurebuild` ingress `compost-shared-<name>-crowdsec`. Compose makes the service name a host name on every network the container joins, so it is unique on purpose: an app's own `postgres` service stays `postgres` |
+| Shared app container | `compost-<kind>-<name>`, like its project, e.g. `compost-database-postgres18`; OpenObserve's collector is `compost-monitoring-<name>-collector`, Temporal's admin tools `compost-workflow-<name>-admin`, a CrowdSec agent `compost-ingress-<name>-crowdsec` |
+| Built image | `compost-caddysecurebuild-<name>:<hash>` of a `caddysecurebuild` ingress; `compost-communication:<hash>` of communication apps |
+| Release image | `compost-release/<app>-<prefix>:<n>-<service>`: the image a service ran in release `<n>`, kept for `app rollback` |
+| Volumes | `compost-ingress-<name>_crowdsec-data` and `_crowdsec-config`: state of a CrowdSec agent |
+| Ingress network | `compost-ingress`; a `caddysecurebuild` ingress also has `compost-ingress-<name>_crowdsec`, which only Caddy and its CrowdSec agent join |
+| Database network | `compost-db-<name>`; the database's host name is `<name>` |
+| Key-value network | `compost-kv-<name>`; host name `<name>` |
+| Storage network | `compost-storage-<name>`; host name `<name>` |
+| OIDC network | `compost-oidc-<name>`; host name `<name>` |
+| Workflow network | `compost-wf-<name>`; host name `<name>` |
+| Monitoring network | `compost-monitoring-<name>`; the collector's host name is `<name>` |
+| A service's name on the ingress and monitoring networks | `<app>-<prefix>-<service>`; for a shared app its service name, `compost-shared-<name>` |
+
+So you can use plain Docker commands:
+
+```sh
+docker compose -p myapp-staging logs -f backend
+docker compose -p compost-database-postgres18 exec compost-shared-postgres18 psql -U postgres
+docker exec -it compost-database-postgres18 psql -U postgres
+```
+
+From your machine, `compost app logs` and `compost server logs` show the same output without logging in to the server (see [Logs](Applications.md#logs)), and `compost app exec` and `compost server exec` run commands in the containers (see [Admin commands](Admin-Commands.md)).
