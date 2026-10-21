@@ -26,6 +26,7 @@ Commands:
   secret      Store application secrets on the server for `app deploy`
   config      Set and show preferences, e.g. `deploy.apply`
   agent       Documentation for AI agents: llms.txt, llms-full.txt and an Agent Skill
+  images      List the images and modules this compost uses unless the config names others
   help        Print this message or the help of the given subcommand(s)
 
 Options:
@@ -64,6 +65,7 @@ Commands:
   define    Add or replace a server in the local configuration
   list      List defined servers
   state     Check and display server state
+  images    Show the image, version and age of each shared app's containers
   deploy    Deploy shared applications from compost-server.yaml
   backup    Back up shared applications (data, configuration and secrets)
   restore   Restore shared applications from a server backup
@@ -149,6 +151,21 @@ Options:
   -h, --help                 Print help
 ```
 
+## `compost server images`
+
+```text
+Show the image, version and age of each shared app's containers
+
+Usage: compost server images [OPTIONS]
+
+Options:
+      --check                Also ask the registries whether a tag has a newer image (with `docker buildx imagetools` on the server), and GitHub whether compost has a newer release. Changes nothing
+  -s, --server <SERVER>      Target server (default: `COMPOST_SERVER`, then the current context) [env: COMPOST_SERVER=]
+  -v, --verbose              Print every command run on the server
+      --ssh-key-file <PATH>  SSH private key for this command, instead of the server's `identity_file` [env: COMPOST_SSH_KEY_FILE=]
+  -h, --help                 Print help
+```
+
 ## `compost server deploy`
 
 ```text
@@ -169,6 +186,7 @@ Options:
       --pull                 Pull images again, even when their tags did not change, and build images that compost builds on newer base images (needs `--apply`)
       --recreate             Recreate every container, even unchanged ones; data in volumes is kept (needs `--apply`)
       --secret <FILE>        Overlay with secrets (e.g. .compost-server.secrets.yaml) to store on the server and deploy with, replacing the stored one; later deploys use it without the file
+      --shared <SHARED>      Only this shared app (repeatable or comma-separated; `kind/name` when two kinds have one with the name): the others, and their part of the stored configuration, stay as they were deployed. `--pull` and `--recreate` apply to it only
   -h, --help                 Print help
 ```
 
@@ -1200,6 +1218,21 @@ Usage: compost agent skill [OPTIONS]
 
 Options:
       --dir <DIR>            Skills folder; the skill goes in its `compost` subfolder, e.g. `~/.claude/skills` for all your projects or `.agents/skills` [default: .claude/skills]
+  -s, --server <SERVER>      Target server (default: `COMPOST_SERVER`, then the current context) [env: COMPOST_SERVER=]
+  -v, --verbose              Print every command run on the server
+      --ssh-key-file <PATH>  SSH private key for this command, instead of the server's `identity_file` [env: COMPOST_SSH_KEY_FILE=]
+  -h, --help                 Print help
+```
+
+## `compost images`
+
+```text
+List the images and modules this compost uses unless the config names others
+
+Usage: compost images [OPTIONS]
+
+Options:
+      --markdown             Print a Markdown table, as on the wiki page Bundled-Images
   -s, --server <SERVER>      Target server (default: `COMPOST_SERVER`, then the current context) [env: COMPOST_SERVER=]
   -v, --verbose              Print every command run on the server
       --ssh-key-file <PATH>  SSH private key for this command, instead of the server's `identity_file` [env: COMPOST_SSH_KEY_FILE=]
